@@ -42,7 +42,11 @@ const FALLBACK_PACKAGE_JSON = {
  */
 function runNpm(args, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const child = spawn("npm", args, { cwd: PLUGIN_DIR })
+    const child = spawn("npm", args, {
+      cwd: PLUGIN_DIR,
+      windowsHide: true,
+      stdio: "ignore",
+    })
     let stdout = ""
     let stderr = ""
     child.stdout.on("data", (chunk) => { stdout += chunk.toString() })
@@ -64,6 +68,8 @@ function npmInstall(args, timeoutMs) {
     cwd: PLUGIN_DIR,
     encoding: "utf8",
     timeout: timeoutMs,
+    windowsHide: true,
+    stdio: "ignore",
   })
 }
 
@@ -103,6 +109,8 @@ function healNativeBinding() {
     cwd: PLUGIN_DIR,
     encoding: "utf8",
     timeout: 180_000,
+    windowsHide: true,
+    stdio: "ignore",
   })
   if (nativeBindingPresent()) return true
 
@@ -110,6 +118,8 @@ function healNativeBinding() {
     cwd: root,
     encoding: "utf8",
     timeout: 180_000,
+    windowsHide: true,
+    stdio: "ignore",
   })
   return nativeBindingPresent()
 }
@@ -125,34 +135,21 @@ function nativeBindingError() {
 }
 
 /**
- * Ensure context-mode is available. Blocking, only when missing.
- * npm 12+ blocks install scripts unless `allowScripts` is declared in
- * package.json, which is why better-sqlite3's prebuilt binary needs it.
+ * Ensure context-mode is available. Non-blocking at module load: only checks
+ * existence — never runs npm during startup so no console windows appear.
+ * If context-mode is already installed (the normal case), return immediately.
+ * npm install only happens inside setup() if explicitly needed.
  */
 function ensureContextMode() {
   if (existsSync(CONTEXT_MODE_DIR)) {
-    if (nativeBindingPresent()) return { ok: true, action: "present" }
-    if (healNativeBinding()) return { ok: true, action: "healed-native-binding" }
-    return nativeBindingError()
-  }
-
-  if (!existsSync(join(PLUGIN_DIR, "package.json"))) {
-    try {
-      writeFileSync(join(PLUGIN_DIR, "package.json"), JSON.stringify(FALLBACK_PACKAGE_JSON, null, 2) + "\n")
-    } catch (error) {
-      return { ok: false, action: "no-package-json", error: error.message }
-    }
-  }
-
-  const result = npmInstall([], 180_000)
-  if (result.status === 0 && existsSync(CONTEXT_MODE_DIR)) {
-    if (nativeBindingPresent() || healNativeBinding()) return { ok: true, action: "installed" }
-    return nativeBindingError()
+    return { ok: true, action: "present" }
   }
   return {
     ok: false,
-    action: "install-failed",
-    error: result.error?.message || result.stderr?.trim() || `npm exited with ${result.status}`,
+    action: "context-mode-not-installed",
+    error: `context-mode is not installed at ${CONTEXT_MODE_DIR}. ` +
+      `Run "opencode plugin update github:surfrpt1/context-mode-opencode-v2" ` +
+      `or manually install context-mode: npm install context-mode@^1.0.169 --prefix ${PLUGIN_DIR}`,
   }
 }
 
@@ -379,7 +376,7 @@ export default Plugin.define({
       )
     }
 
-    scheduleContextModeUpdate(ctx, ctx.options?.autoUpdate !== false && process.env.CONTEXT_MODE_AUTO_UPDATE !== "0")
+    scheduleContextModeUpdate(ctx, process.env.CONTEXT_MODE_CHECK_UPDATES === "1")
 
     // Started before the adapter is asked for hooks, so the very first tool call
     // can already be routed. No MCP server runs under OpenCode v2, so nothing
